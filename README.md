@@ -68,3 +68,14 @@ eon/
 ├── DEMO_CASES.md
 ├── DISTRIBUTION.md
 └── windows installer and packaging assets
+```
+
+---
+
+## License
+
+Custom license — personal, educational, and non-commercial use permitted. Commercial use requires written permission. See [LICENSE](LICENSE) and [docs/LICENSE.md](docs/LICENSE.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
