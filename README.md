@@ -1,5 +1,7 @@
 # EON
 
+> **Lifecycle:** Alpha · **Role:** Commercial product · **Audience:** Personal finance (local-first)
+
 EON is a local-first, deterministic-first personal financial assistant built for clarity, control, and structured financial decision-making.
 
 Its behavior is designed to remain understandable: state is explicit, mutations are constrained, and core outputs are produced through deterministic logic before any optional AI layer is used.
