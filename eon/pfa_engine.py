@@ -40,17 +40,39 @@ except ImportError:
 
 # -------------------- Config --------------------
 
-BASE_DIR = Path(os.getenv("EON_PFA_BASE_DIR", Path.home() / "AI"))
-FINANCE_DIR = BASE_DIR / "finance"
-MODELS_DIR = BASE_DIR / "models"
+def _resolve_base_dir() -> Path:
+	if os.getenv("K1_EON_DATA_DIR"):
+		return Path(os.getenv("K1_EON_DATA_DIR"))
+	return Path(os.getenv("EON_PFA_BASE_DIR", Path.home() / "AI"))
+
+
+def _resolve_models_dir() -> Path:
+	if os.getenv("K1_MODELS_DIR"):
+		return Path(os.getenv("K1_MODELS_DIR"))
+	if os.getenv("K1_EON_DATA_DIR"):
+		return Path("/opt/k1/models")
+	base = Path(os.getenv("EON_PFA_BASE_DIR", Path.home() / "AI"))
+	return base / "models"
+
+
+BASE_DIR = _resolve_base_dir()
+FINANCE_DIR = BASE_DIR if os.getenv("K1_EON_DATA_DIR") else BASE_DIR / "finance"
+MODELS_DIR = _resolve_models_dir()
 REPORTS_DIR = FINANCE_DIR / "reports"
 
 PROFILE_PATH = FINANCE_DIR / "profile.json"
 PROFILE_BACKUP_PATH = FINANCE_DIR / "profile_last_backup.json"
 SUMMARY_PATH = FINANCE_DIR / "mastercard_summary.json"
 CHANGE_JOURNAL_PATH = FINANCE_DIR / "change_journal.csv"
-MODEL_PATH = Path(os.getenv("EON_PFA_MODEL_PATH", MODELS_DIR / "mistral-clean-q4_k_m.gguf"))
-PROGRAM_VERSION = "0.1.0"
+def _initial_model_path() -> Path:
+	"""Resolve startup model path without a brittle hardcoded required filename."""
+	from eon.local_models import resolve_model_path
+
+	return resolve_model_path(MODELS_DIR)
+
+
+MODEL_PATH = _initial_model_path()
+PROGRAM_VERSION = "0.1.1"
 
 DEFAULT_CTX = 2048
 DEFAULT_THREADS = 6
@@ -329,9 +351,16 @@ def get_profile_context():
 	if not profile:
 		return None, "❌ No profile found. Create a new profile first with option 1."
 
-	profile = update_profile_estimates(profile)
-	save_profile(profile)
+	profile_type = normalize_text(profile.get("type", "personal"))
+	if profile_type != "personal":
+		return (
+			None,
+			"❌ EON supports personal profiles only in the current release. "
+			"Business profiles are out of scope.",
+		)
 
+	# In-memory estimates only — do not persist on read (constitution: no undocumented mutation).
+	profile = update_profile_estimates(profile)
 	return profile, None
 
 
@@ -2101,7 +2130,7 @@ def build_unsupported_modification_message():
 	)
 
 
-def deterministic_undo_last_change(profile, prompt):
+def deterministic_undo_last_change(profile, prompt, apply_mutations=True):
 	prompt_l = normalize_text(prompt)
 
 	trigger_words = [
@@ -2122,6 +2151,15 @@ def deterministic_undo_last_change(profile, prompt):
 
 	backup = update_profile_estimates(backup)
 
+	if not apply_mutations:
+		return (
+			"Proposed undo (not applied): restore profile from last backup. "
+			f"Income would be {format_money(backup.get('estimated_monthly_income', 0.0))}, "
+			f"expenses {format_money(backup.get('estimated_monthly_expenses', 0.0))}, "
+			f"savings {format_money(backup.get('estimated_monthly_savings', 0.0))}. "
+			"Confirm via interactive `eon` menu or call with apply_mutations=True."
+		)
+
 	if not save_profile(backup):
 		return "❌ Backup was found but could not be restored."
 
@@ -2133,7 +2171,7 @@ def deterministic_undo_last_change(profile, prompt):
 	)
 
 
-def deterministic_profile_modification(profile, prompt):
+def deterministic_profile_modification(profile, prompt, apply_mutations=True):
 	prompt_l = normalize_text(prompt)
 
 	modification_triggers = [
@@ -2356,12 +2394,6 @@ def deterministic_profile_modification(profile, prompt):
 	if profile_copy == profile_current:
 		return "No effective change was applied. The requested values already match the current profile."
 
-	if not create_profile_backup(profile):
-		return "❌ Changes were computed but the pre-change backup could not be saved."
-
-	if not save_profile(profile_copy):
-		return "❌ Changes were computed but could not be saved to profile.json."
-
 	changed_parts = []
 	changed_fields = []
 
@@ -2371,6 +2403,23 @@ def deterministic_profile_modification(profile, prompt):
 			changed_parts.append(f"{frequency} income changed to {format_money(value)}")
 		else:
 			changed_parts.append(f"{display_names.get(field, field)} changed to {format_money(value)}")
+
+	preview = (
+		f"Proposed changes (not applied): {join_changed_parts(changed_parts)}. "
+		f"Estimated monthly income would be {format_money(profile_copy.get('estimated_monthly_income', 0.0))}, "
+		f"expenses {format_money(profile_copy.get('estimated_monthly_expenses', 0.0))}, "
+		f"savings {format_money(profile_copy.get('estimated_monthly_savings', 0.0))}. "
+		"Confirm via interactive `eon` menu or call with apply_mutations=True."
+	)
+
+	if not apply_mutations:
+		return preview
+
+	if not create_profile_backup(profile):
+		return "❌ Changes were computed but the pre-change backup could not be saved."
+
+	if not save_profile(profile_copy):
+		return "❌ Changes were computed but could not be saved to profile.json."
 
 	journal_ok, journal_error = append_change_journal(
 		command=prompt,
@@ -2824,7 +2873,7 @@ def deterministic_offset_requirement(profile, prompt):
 	)
 
 
-def run_deterministic_engine(profile, prompt):
+def run_deterministic_engine(profile, prompt, apply_mutations=True):
 	mutation_handlers = [
 		deterministic_undo_last_change,
 		deterministic_profile_modification,
@@ -2848,9 +2897,16 @@ def run_deterministic_engine(profile, prompt):
 
 	for handler in mutation_handlers:
 		try:
-			result = handler(profile, prompt)
+			result = handler(profile, prompt, apply_mutations=apply_mutations)
 			if result is not None:
 				return result
+		except TypeError:
+			try:
+				result = handler(profile, prompt)
+				if result is not None:
+					return result
+			except Exception:
+				continue
 		except Exception:
 			continue
 
@@ -2870,32 +2926,125 @@ def run_deterministic_engine(profile, prompt):
 
 # -------------------- Model Layer --------------------
 
-def get_llm():
+def list_available_local_models():
+	from eon.local_models import discover_gguf_models
+
+	return discover_gguf_models(MODELS_DIR)
+
+
+def recommend_local_model(models=None):
+	from eon.local_models import discover_gguf_models, recommend_best_model
+
+	candidates = models if models is not None else discover_gguf_models(MODELS_DIR)
+	return recommend_best_model(candidates)
+
+
+def select_local_model_interactive():
+	"""List replaceable GGUF tools, mark one best-fit suggestion, let the user choose."""
+	global MODEL_PATH
 	global LLM
+
+	from eon.local_models import format_model_choice_menu
+
+	env_override = os.getenv("EON_PFA_MODEL_PATH")
+	if env_override:
+		override_path = Path(env_override)
+		if override_path.exists():
+			if MODEL_PATH != override_path:
+				LLM = None
+			MODEL_PATH = override_path
+			print(f"Using EON_PFA_MODEL_PATH override: {MODEL_PATH}")
+			return MODEL_PATH
+		print(f"⚠️ EON_PFA_MODEL_PATH is set but missing: {override_path}")
+		print("Falling back to discovered local GGUF models (if any).")
+
+	models = list_available_local_models()
+	suggested = recommend_local_model(models)
+	print(format_model_choice_menu(models, suggested))
+
+	if not models:
+		print("")
+		print(f"❌ No runnable GGUF models found in {MODELS_DIR}")
+		print("Place one or more .gguf files there, or set EON_PFA_MODEL_PATH.")
+		print("Models are replaceable tools — EON will not download one.")
+		return None
+
+	if len(models) == 1:
+		chosen = models[0]
+		print(f"\nOnly one model available — selecting {chosen.name}.")
+	else:
+		default_index = 1
+		if suggested is not None:
+			for index, model in enumerate(models, start=1):
+				if model.path == suggested.path:
+					default_index = index
+					break
+		raw = input(
+			f"Select model [1-{len(models)}] (Enter = suggested #{default_index}): "
+		).strip()
+		if not raw:
+			chosen = models[default_index - 1]
+		else:
+			try:
+				index = int(raw)
+			except ValueError:
+				print("❌ Invalid selection.")
+				return None
+			if index < 1 or index > len(models):
+				print("❌ Invalid selection.")
+				return None
+			chosen = models[index - 1]
+
+	if MODEL_PATH != chosen.path:
+		LLM = None
+	MODEL_PATH = chosen.path
+	print(f"Selected Local AI model: {MODEL_PATH.name}")
+	return MODEL_PATH
+
+
+def get_llm(model_path=None):
+	global LLM
+	global MODEL_PATH
 
 	if Llama is None:
 		print("❌ llama_cpp is not installed in the active environment.")
 		return None
 
-	if LLM is not None:
+	target = Path(model_path) if model_path is not None else MODEL_PATH
+
+	if LLM is not None and target.exists() and str(target) == str(MODEL_PATH):
 		return LLM
 
-	if not MODEL_PATH.exists():
-		print(f"❌ Model not found: {MODEL_PATH}")
+	if not target.exists() or target.name == ".no_gguf_discovered":
+		available = list_available_local_models()
+		if available:
+			suggested = recommend_local_model(available)
+			print("❌ No model selected yet. Available replaceable GGUF tools:")
+			for model in available:
+				marker = " ← suggested" if suggested and model.path == suggested.path else ""
+				print(f"  - {model.name} ({model.size_label()}){marker}")
+			if suggested is not None:
+				print(f"Suggested best fit: {suggested.name}")
+				print("Why: " + "; ".join(suggested.reasons))
+		else:
+			print(f"❌ No runnable GGUF models found in {MODELS_DIR}")
+			print("Place a .gguf file there or set EON_PFA_MODEL_PATH. EON will not download a model.")
 		return None
 
-	print("🔄 Initializing GGUF model...")
+	print(f"🔄 Initializing GGUF model ({target.name})...")
 
 	try:
 		LLM = Llama(
-			model_path=str(MODEL_PATH),
+			model_path=str(target),
 			n_ctx=DEFAULT_CTX,
 			n_threads=DEFAULT_THREADS,
 			n_gpu_layers=DEFAULT_GPU_LAYERS,
 			verbose=False,
 		)
+		MODEL_PATH = target
 	except Exception as e:
 		print(f"❌ Error loading model: {e}")
+		LLM = None
 		return None
 
 	return LLM
@@ -3045,43 +3194,67 @@ def build_allowed_percentage_strings(grounding_data):
 
 
 
-def sanitize_llm_response(response, grounding_data=None):
+BENCHMARK_GUARD_BLOCKED_PHRASES = [
+	"recommended",
+	"ideal",
+	"standard",
+	"normal",
+	"healthy",
+	"best practice",
+	"rule of thumb",
+]
+
+
+def classify_llm_response(response, grounding_data=None):
+	"""Apply the "no invented benchmarks" guard and report why it fired.
+
+	Returns ``(clean_response, guard_reason)``. ``guard_reason`` is ``None``
+	when the response passes; otherwise it names the exact rejection cause so
+	the guard is observable (operator notice + task log), instead of silently
+	swapping in a fallback.
+	"""
 	response = re.sub(r"\s{2,}", " ", str(response or "").strip()).strip()
 	if not response:
-		return None
+		return None, "empty response"
 
 	if grounding_data is None:
-		return response
+		return response, None
 
 	response_l = normalize_text(response)
-	blocked_phrases = [
-		"recommended",
-		"ideal",
-		"standard",
-		"normal",
-		"healthy",
-		"best practice",
-		"rule of thumb",
-	]
-
-	if any(phrase in response_l for phrase in blocked_phrases):
-		return None
+	for phrase in BENCHMARK_GUARD_BLOCKED_PHRASES:
+		if phrase in response_l:
+			return None, f"blocked phrase: '{phrase}'"
 
 	allowed_percentages = build_allowed_percentage_strings(grounding_data)
 	for pct in re.findall(r"(-?[0-9]+(?:\.[0-9]+)?)\s*%", response):
 		if pct not in allowed_percentages:
-			return None
+			return None, f"unsupported percentage: {pct}%"
 
-	return response
+	return response, None
+
+
+def sanitize_llm_response(response, grounding_data=None):
+	clean, _guard_reason = classify_llm_response(response, grounding_data)
+	return clean
 
 
 
 def ask_llm(prompt, context_label, context_data, grounding_data=None, fallback_response=None):
+	"""Run the optional local model and apply the benchmark guard.
+
+	Returns a structured dict so callers can surface and audit *why* an answer
+	was produced or discarded:
+	``{text, routing, benchmark_guard_applied, guard_reason, backend_used}``.
+	"""
 	llm = get_llm()
 	if llm is None:
-		if fallback_response is not None:
-			return fallback_response
-		return "❌ Local AI unavailable: model or runtime environment is not configured."
+		return {
+			"text": fallback_response or "❌ Local AI unavailable: model or runtime environment is not configured.",
+			"routing": "llm_unavailable",
+			"benchmark_guard_applied": False,
+			"guard_reason": None,
+			"backend_used": False,
+		}
 
 	system_prompt = build_system_prompt()
 	full_prompt = (
@@ -3100,17 +3273,34 @@ def ask_llm(prompt, context_label, context_data, grounding_data=None, fallback_r
 			top_p=0.9,
 			stop=["</s>", "<|im_end|>"],
 		)
-		response = output["choices"][0]["text"].strip()
-		response = sanitize_llm_response(response, grounding_data)
+		raw = output["choices"][0]["text"].strip()
+		clean, guard_reason = classify_llm_response(raw, grounding_data)
 
-		if not response:
-			return fallback_response or "❌ Model response was discarded because it included unsupported claims."
+		if clean:
+			return {
+				"text": clean,
+				"routing": "llm",
+				"benchmark_guard_applied": False,
+				"guard_reason": None,
+				"backend_used": True,
+			}
 
-		return response
+		guard_applied = guard_reason != "empty response"
+		return {
+			"text": fallback_response or "❌ Model response was discarded because it included unsupported claims.",
+			"routing": "llm_sanitized_fallback" if guard_applied else "llm_empty",
+			"benchmark_guard_applied": guard_applied,
+			"guard_reason": guard_reason,
+			"backend_used": True,
+		}
 	except Exception as e:
-		if fallback_response:
-			return fallback_response
-		return f"❌ AI error: {e}"
+		return {
+			"text": fallback_response or f"❌ AI error: {e}",
+			"routing": "llm_error",
+			"benchmark_guard_applied": False,
+			"guard_reason": str(e),
+			"backend_used": True,
+		}
 
 
 # -------------------- View / Reporting --------------------
@@ -3168,14 +3358,55 @@ def view_profile():
 
 
 def ask_local_ai(prompt):
+	import sys
+	from datetime import datetime, timezone
+
+	from eon.task_log import ToolCallRecord, record_task_log
+
+	started = datetime.now(timezone.utc)
+	engine_module = sys.modules[__name__]
+
+	def _log(result, tools):
+		try:
+			record_task_log(
+				prompt=prompt,
+				result=result,
+				tools_called=tools,
+				started_at=started,
+				finished_at=datetime.now(timezone.utc),
+				caller="menu",
+				agent="finance",
+				engine=engine_module,
+			)
+		except Exception:
+			pass
+
 	profile, profile_error = get_profile_context()
 	if profile_error:
 		print(profile_error)
+		_log(
+			{"status": "no_profile", "routing": "blocked", "answer": profile_error},
+			[ToolCallRecord(tool="eon.get_profile_context", status="failed", detail=profile_error)],
+		)
 		return
 
 	deterministic_answer = run_deterministic_engine(profile, prompt)
 	if deterministic_answer is not None:
 		print("\n🤖", deterministic_answer)
+		_log(
+			{
+				"status": "ok",
+				"routing": "deterministic",
+				"answer": deterministic_answer,
+				"profile_type": profile.get("type"),
+			},
+			[ToolCallRecord(
+				tool="eon.run_deterministic_engine",
+				status="ok",
+				detail=deterministic_answer,
+				routing="deterministic",
+			)],
+		)
 		return
 
 	prompt_l = normalize_text(prompt)
@@ -3184,8 +3415,12 @@ def ask_local_ai(prompt):
 		credit_data, credit_error = get_credit_context(limit=50)
 		if credit_error:
 			print(credit_error)
+			_log(
+				{"status": "blocked", "routing": "blocked", "answer": credit_error},
+				[ToolCallRecord(tool="eon.get_credit_context", status="failed", detail=credit_error)],
+			)
 			return
-		response = ask_llm(
+		llm_result = ask_llm(
 			prompt,
 			"Recent Mastercard Transactions",
 			credit_data,
@@ -3194,7 +3429,7 @@ def ask_local_ai(prompt):
 	else:
 		grounding_data = build_profile_llm_grounding(profile)
 		fallback_response = build_grounded_profile_ai_fallback(profile, prompt)
-		response = ask_llm(
+		llm_result = ask_llm(
 			prompt,
 			"Financial Profile",
 			profile,
@@ -3202,11 +3437,49 @@ def ask_local_ai(prompt):
 			fallback_response=fallback_response,
 		)
 
+	response = llm_result.get("text")
+	routing = llm_result.get("routing", "llm")
+	guard_applied = bool(llm_result.get("benchmark_guard_applied"))
+	guard_reason = llm_result.get("guard_reason")
+
 	if not response:
 		print("\n❌ Local AI could not produce a safe response.")
-		return
+	else:
+		if guard_applied:
+			print(
+				f"\n🛡️  No-invented-benchmarks guard applied ({guard_reason}); "
+				"returning a grounded answer instead of the model's claim."
+			)
+		print("\n🤖", response)
 
-	print("\n🤖", response)
+	status = "ok"
+	if routing == "llm_unavailable":
+		status = "requires_ai"
+	elif routing == "llm_error":
+		status = "error"
+
+	tool_status = "ok"
+	if guard_applied:
+		tool_status = "blocked"
+	elif routing in ("llm_error", "llm_unavailable"):
+		tool_status = "failed"
+
+	_log(
+		{
+			"status": status,
+			"routing": routing,
+			"answer": response,
+			"profile_type": profile.get("type"),
+			"benchmark_guard_applied": guard_applied,
+			"guard_reason": guard_reason,
+		},
+		[ToolCallRecord(
+			tool="eon.ask_llm",
+			status=tool_status,
+			detail=guard_reason or response,
+			routing=routing,
+		)],
+	)
 
 
 # -------------------- Regression Harness --------------------
@@ -3487,7 +3760,7 @@ def run_regression_tests():
 
 def main():
 	while True:
-		print("\n=== Financial Agent ===")
+		print("\n=== EON PFA ===")
 		print("1. Create New Profile")
 		print("2. View Profile")
 		print("3. Local AI")
@@ -3503,6 +3776,10 @@ def main():
 			view_profile()
 
 		elif choice == "3":
+			selected = select_local_model_interactive()
+			if selected is None:
+				continue
+
 			print("Enter your prompt for the Local AI:")
 			print("(Paste one or multiple lines. Press Enter on an empty line to submit.)")
 
@@ -3543,7 +3820,8 @@ def print_usage():
 	print("")
 	print("Environment variables:")
 	print("  EON_PFA_BASE_DIR   Override the base AI directory")
-	print("  EON_PFA_MODEL_PATH Override the GGUF model path")
+	print("  EON_PFA_MODEL_PATH Override the GGUF model path (optional; else discover)")
+	print("  K1_MODELS_DIR      Directory scanned for replaceable local GGUF tools")
 
 
 def entrypoint():

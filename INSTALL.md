@@ -1,105 +1,147 @@
-# EON PFA
+# EON — Rocky Linux headless install
 
-Local personal financial assistant with deterministic-first reasoning and optional local AI.
+Reproducible install for EON on a Rocky Linux 10+ headless host, aligned with
+[SIM](../SIM/README.md) conventions (`/opt/k1` layout, structured health checks,
+verify scripts).
 
-## Project layout
+Authority: [K1_constitution.txt](../K1_constitution.txt) (local-first, explicit state).
 
-Expected project layout:
+## Requirements
 
-- `~/AI/finance/EON_PFA.py`
-- `~/AI/finance/requirements-core.txt`
-- `~/AI/finance/requirements-charts.txt`
-- `~/AI/finance/requirements-ai.txt`
+| Item | Minimum |
+| --- | --- |
+| OS | Rocky Linux 10+ (or compatible RHEL-like) |
+| Python | 3.10+ (3.12 recommended; matches SIM) |
+| Network | Not required for core deterministic mode |
+| Disk | Writable `/opt/k1` (or custom paths via env vars) |
 
-Default local model path:
+Core EON has no compiled dependencies. Optional extras:
 
-- `~/AI/models/mistral-clean-q4_k_m.gguf`
+| Extra | Package | Notes |
+| --- | --- | --- |
+| `charts` | matplotlib | Profile charts in interactive menu |
+| `ai` | llama-cpp-python | Local GGUF inference; may need `gcc`, `cmake` |
 
-## Core install
-
-Core mode is deterministic-first and does not require charting or local AI.
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements-core.txt
-python -m py_compile EON_PFA.py
-python EON_PFA.py --self-test
-```
-
-## Optional chart support
+## Option A — Standalone EON (finance-only host)
 
 ```bash
-python -m pip install -r requirements-charts.txt
-python -m py_compile EON_PFA.py
+cd /path/to/K1/EON
+sudo mkdir -p /opt/k1/data/eon /opt/k1/logs
+sudo chown -R "$USER:$USER" /opt/k1/data/eon /opt/k1/logs
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
+
+export K1_EON_DATA_DIR=/opt/k1/data/eon
+export K1_EON_LOG_DIR=/opt/k1/logs
+
+eon --version
+eon health --json
+./scripts/verify.sh
 ```
 
-If `matplotlib` is not installed, the program still runs and `View Profile` prints a chart-unavailable warning instead of crashing.
-
-## Optional local AI support
+Create a profile (first run):
 
 ```bash
-python -m pip install -r requirements-ai.txt
-python -m py_compile EON_PFA.py
+eon menu    # choose option 1 — Create / update profile
 ```
 
-If `llama-cpp-python` is not installed or the model is unavailable, deterministic logic still works and Local AI degrades gracefully.
+Or copy an existing `profile.json` into `$K1_EON_DATA_DIR`.
 
-## Run
+## Option B — K1 runtime with FinanceAgent
+
+Install EON as an optional K1 extra from the repository root:
 
 ```bash
-python EON_PFA.py
+cd /path/to/K1
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e ".[dev,finance]"
+
+export K1_EON_DATA_DIR=/opt/k1/data/eon
+export K1_EON_LOG_DIR=/opt/k1/logs
+export K1_RUNTIME_TASK_STATE=/opt/k1/logs/task-lifecycle.json
+
+eon health --json
+pytest -q tests/test_generated_agents.py -k finance
 ```
 
-## CLI
+`FinanceAgent` delegates in-scope tasks to `eon.bridge.query_finance_task` when
+the `eon` package is installed.
+
+## Option C — Scripted install (SIM-provisioned host)
+
+After SIM has created the K1 directory layout (`sim phase2-init`):
 
 ```bash
-python EON_PFA.py --help
-python EON_PFA.py --version
-python EON_PFA.py --self-test
+cd /path/to/K1/EON
+./scripts/install_headless.sh
 ```
 
-## Environment overrides
+The script creates `/opt/k1/data/eon` and `/opt/k1/logs`, installs EON in a
+local venv, runs `eon health` and `./scripts/verify.sh`.
 
-Override the base directory:
+Override paths:
 
 ```bash
-export EON_PFA_BASE_DIR="$HOME/AI"
+K1_EON_DATA_DIR=/data/eon K1_EON_LOG_DIR=/var/log/eon ./scripts/install_headless.sh
 ```
 
-Override the model path:
+## Environment variables
+
+| Variable | Default (K1 layout) | Purpose |
+| --- | --- | --- |
+| `K1_EON_DATA_DIR` | — | Profile, journal, reports |
+| `K1_EON_LOG_DIR` | `/opt/k1/logs` | `eon.log` and task audit log |
+| `K1_EON_TASK_LOG` | `$K1_EON_LOG_DIR/eon-task-log.jsonl` | JSONL task audit (Phase B) |
+| `K1_MODELS_DIR` | `/opt/k1/models` | GGUF models (optional AI) |
+| `EON_PFA_BASE_DIR` | `~/AI` | Legacy layout when `K1_EON_DATA_DIR` unset |
+
+## Verification checklist
 
 ```bash
-export EON_PFA_MODEL_PATH="$HOME/AI/models/mistral-clean-q4_k_m.gguf"
+eon health              # operator dashboard
+eon health --json       # monitoring-friendly output
+eon self-test           # 25 regression checks
+eon query "what are my monthly expenses?"
+eon logs --json -n 5    # recent task audit entries
+cd K1/EON && ./scripts/verify.sh   # pytest + self-test gate
 ```
 
-## Minimal validation sequence
+Expected: `health` reports `ok` or `degraded` (warnings for missing profile/charts/AI
+are acceptable). `self-test` must show `25/25 passed`.
 
-### Core only
+## Optional extras
 
 ```bash
-python -m py_compile EON_PFA.py
-python EON_PFA.py --self-test
-python EON_PFA.py
+# From K1/EON venv
+pip install -e ".[charts]"
+pip install -e ".[ai]"    # may require: dnf install gcc cmake
 ```
 
-### With charts
+## Coexistence with SIM
 
-Use `View Profile` and confirm chart files are generated when chart support is installed.
+| Subsystem | Data root | CLI | Role |
+| --- | --- | --- | --- |
+| SIM | manifest + SQLite state | `sim` | Infrastructure reconciliation |
+| EON | `/opt/k1/data/eon` | `eon` | Personal finance control plane |
 
-### With local AI
+Both use `/opt/k1/logs` for operator logs. SIM phase reports and EON task audit
+logs are separate files and do not conflict.
 
-Use `Local AI` and test:
-- `what are my monthly expenses?`
-- `give me a qualitative summary of my situation`
+## Troubleshooting
 
-## Current branch scope
+| Symptom | Fix |
+| --- | --- |
+| `no_profile` on query | Run `eon menu` option 1 or set `K1_EON_DATA_DIR` to a dir with `profile.json` |
+| `task_log_writable` warning | `sudo chown` on `K1_EON_LOG_DIR` or set `K1_EON_TASK_LOG` to a writable path |
+| `FinanceAgent` shows `eon_available: false` | `pip install -e ".[finance]"` from K1 root |
+| `python: command not found` in verify.sh | `PYTHON=python3 ./scripts/verify.sh` or activate venv first |
 
-- personal-only
-- deterministic-first
-- multi-income support
-- one-step undo
-- CSV change journal
-- forecasting layer
-- decision layer
-- optional charts
-- optional local AI
+## Legacy shim
+
+`~/AI/finance/EON_PFA.py` remains for existing workflows. It delegates to the
+`K1/EON` package when present on `PYTHONPATH`.

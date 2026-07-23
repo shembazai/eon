@@ -1,2 +1,0 @@
-# EON PFA deterministic core
-# No third-party packages required for core deterministic use.

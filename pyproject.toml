@@ -1,0 +1,33 @@
+[project]
+name = "eon"
+version = "0.1.1"
+description = "EON — deterministic local-first personal finance (Shembazaï / K1 Tool Bus eon.*)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [ { name = "Shembazaï" } ]
+urls = { Repository = "https://github.com/shembazai/eon", Documentation = "https://github.com/shembazai/eon#readme" }
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+charts = ["matplotlib"]
+ai = ["llama-cpp-python"]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+eon = "eon.cli:app"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["eon*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

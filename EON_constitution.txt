@@ -1,0 +1,171 @@
+# EON Constitution v1.0
+
+Authority: subordinate to `K1/K1_constitution.txt`.
+If this file conflicts with the K1 constitution, the K1 constitution wins.
+
+## 1. Purpose
+
+EON is the deterministic personal finance subsystem for K1 — a finance control
+plane analogous to SIM for infrastructure.
+
+EON turns personal financial state into auditable forecasts, decisions, and
+advice. Core behavior must remain correct without network access and without
+an LLM.
+
+EON is the first operational product client of Shembazaï/K1. Services may fund
+EON development; they must not redefine EON's product identity without an
+explicit doctrine change.
+
+## 2. Relationship to K1
+
+| Layer | Component | Responsibility |
+| --- | --- | --- |
+| Agent | `FinanceAgent` | Task routing, scope checks, structured outputs |
+| Tool / subsystem | **EON** | Deterministic engine, profile state, journal, bridge API |
+| Infrastructure | SIM | Host provisioning and IRE reconciliation |
+
+Per K1 constitution §13.3 (alpha agent cap), EON is a **tool**, not a separate
+K1 agent. The Finance Agent delegates in-scope work through `eon.bridge`.
+
+Canonical package home: `K1/EON/`.
+GitHub mirror: `eon_git_sync/` (sync after package changes).
+Legacy shim: `finance/EON_PFA.py` (compatibility only).
+
+## 3. Governing Principles
+
+Merged from EON security doctrine, `/AI` structural engineering (EON entity
+definition), and EON security-auditor constraints.
+
+### 3.1 Deterministic first
+
+Never use AI when deterministic logic is sufficient. Calculations, forecasts,
+routing, and data transforms must be reproducible. Flag hidden randomness,
+undocumented state changes, and time-dependent outputs that lack an audit
+reason.
+
+### 3.2 Local first / user sovereignty
+
+- Users retain control of their data
+- Export and delete paths must exist or be planned explicitly
+- No cloud dependency for core functions unless explicitly approved
+- Optional AI and charts must degrade gracefully; core mode needs no network
+
+### 3.3 Explicit, auditable state
+
+Primary artifacts:
+
+- `profile.json` — declared personal finance state
+- `change_journal.csv` — mutation history
+- backup / undo artifacts before risky mutation
+
+Every important decision must be traceable (logs, journals, configuration
+history, release records).
+
+### 3.4 Mutation firewall
+
+State changes are constrained. Backup before mutation. Prefer one-step undo
+over silent overwrite. Personal scope only in the current branch — no business
+finance profiles unless the constitution and this file are updated.
+
+### 3.5 Security by design
+
+Security exists before deployment. Reject security through obscurity, hidden
+trust relationships, and unverified assumptions about financial integrity.
+
+### 3.6 Monozukuri
+
+Build only what creates financial decision value. Prefer a working personal
+assistant over speculative market platforms. Reproducibility over convenience.
+
+### 3.7 AI is optional
+
+No AI dependency for core financial functions. Local AI (llama.cpp / GGUF) is
+an interactive fallback only, never the sole source of truth for numbers.
+
+### 3.8 Human strategic authority
+
+EON recommends; the operator decides. Automation must not remove user control
+of money, identity, or profile mutation without explicit confirmation flows.
+
+Bridge/API default: `query_finance_task(..., apply_mutations=False)` returns a
+mutation preview (`status=requires_confirm`). Applying requires interactive
+`eon` flows or an explicit `apply_mutations=True` call.
+
+## 4. Architecture Model
+
+```
+User / FinanceAgent
+  ? eon.bridge.query_finance_task (or CLI)
+  ? deterministic router (run_deterministic_engine)
+  ? profile.json + change_journal.csv
+  ? optional LLM fallback (interactive Local AI only)
+```
+
+| Module | Responsibility |
+| --- | --- |
+| `eon.pfa_engine` | Core logic: profile, forecast, decision, mutation firewall |
+| `eon.config` | Path resolution (`K1_EON_DATA_DIR`, legacy `~/AI` layout) |
+| `eon.health` | Operator health checks |
+| `eon.bridge` | Agent-facing API |
+| `eon.cli` | Typer CLI |
+| `eon.task_log` | JSONL audit per bridge invocation (K1 observability) |
+
+## 5. Agent Contract Mapping (K1 §4.2)
+
+| Field | Value |
+| --- | --- |
+| name | `eon` (tool) / `finance` (K1 agent facade) |
+| purpose | Personal financial decision support |
+| inputs | Natural-language prompts, structured profile |
+| outputs | Deterministic answers, forecasts, advice, journal entries |
+| limitations | Personal-only; no remote AI by default; encryption at rest not yet required doctrine |
+| tools | JSON I/O, CSV journal, optional matplotlib, optional llama-cpp |
+| memory | profile, journal, profile backup |
+
+## 6. Out of Scope (Current Branch)
+
+Unless this constitution is revised:
+
+- Business finance profiles and multi-entity accounting
+- Remote AI by default
+- Password / encryption implementation as a blocker for core use
+- OCR / voice input
+- Treating EON as a new K1 agent under the alpha agent cap
+
+## 7. Operator Contract
+
+EON shall provide:
+
+- `eon health` / `eon health --json`
+- `eon self-test` regression harness
+- `eon query` / bridge API for FinanceAgent
+- structured task logs suitable for K1 alpha observability
+
+EON shall not:
+
+- invent benchmarks or facts in deterministic mode
+- mutate profile state without journal coverage for supported mutations
+- require Rich formatting on JSON output channels (`typer.echo`)
+
+## 8. Documentation Map
+
+| Document | Role |
+| --- | --- |
+| This file | Foundation / doctrine |
+| `README.md` | Operator handbook |
+| `docs/architecture.md` | Component map |
+| `docs/security.md` | Security narrative |
+| `docs/ROADMAP.md` | Delivery status and decisions |
+| `docs/DEMO_CASES.md` | Demo scenarios |
+
+## 9. Success Criteria
+
+EON succeeds when:
+
+- personal finance questions get correct deterministic answers without an LLM
+- mutations are journaled and undoable where supported
+- FinanceAgent can delegate through `eon.bridge` with structured outputs
+- operators can diagnose health and recent tasks without reading source
+- the subsystem remains replaceable behind its bridge interface
+
+End of EON constitution.

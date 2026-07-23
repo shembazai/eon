@@ -1,83 +1,92 @@
 # EON
 
-> **Lifecycle:** Alpha · **Role:** Commercial product · **Audience:** Personal finance (local-first)
+> **Lifecycle:** Alpha · **Role:** Commercial product (also K1 Tool Bus `eon.*`) · **Audience:** Personal finance (local-first)
 
-EON is a local-first, deterministic-first personal financial assistant built for clarity, control, and structured financial decision-making.
+EON is the **deterministic finance control plane** for [K1](https://github.com/shembazai/k1) — the counterpart to
+[SIM](https://github.com/shembazai/sim) (infrastructure reconciliation). Both follow the
+same operational patterns: explicit state, auditable changes, health checks,
+and graceful degradation under partial failure.
 
-Its behavior is designed to remain understandable: state is explicit, mutations are constrained, and core outputs are produced through deterministic logic before any optional AI layer is used.
+Authority for governance and architecture:
 
----
+- [K1 constitution](https://github.com/shembazai/k1/blob/main/K1_constitution.txt) — parent doctrine
+- [EON_constitution.txt](EON_constitution.txt) — EON foundation (subordinate)
 
-## Why EON exists
+## Role in K1
 
-Many financial tools become opaque as they become more automated.
+| Layer | Component | Responsibility |
+| --- | --- | --- |
+| Capability | `FinanceCapability` | Scope checks, mission routing, structured outputs |
+| Tool Bus | `eon.*` | `available` / `query` / `health` / `profile` ops |
+| Tool / subsystem | **EON** | Deterministic finance engine, profile state, journal |
+| Infrastructure | SIM | Host provisioning and IRE reconciliation |
 
-EON takes the opposite approach. It prioritizes transparency, predictability, and user control. The goal is to keep financial reasoning legible, auditable, and stable while still allowing optional local AI support where deterministic logic does not apply.
+EON is a **tool**, not a peer OS or user-facing agent. Missions reach it through
+Mission Manager → Finance capability → Tool Bus.
 
----
+## Design principles (constitution-aligned)
 
-## Current Scope
+- **Local-first** — core mode needs no network or LLM
+- **Deterministic-first** — math and routing before model fallback
+- **Explicit state** — JSON profile, CSV change journal, one-step undo
+- **Operational resilience** — `eon health`, structured logs, degraded modes
+- **Modularity** — replaceable engine behind `eon.bridge` interface
+- **Simplicity** — single personal-finance scope; no business branch in this release
 
-This release is focused on **personal finance only**.
+## Install
 
-Included in the current branch:
+Standalone:
 
-- Multi-income personal profiles
-- Monthly income, expense, and savings estimation
-- Budget breakdown and expense structuring
-- Deterministic forecasting and goal projections
-- Deterministic decision support
-- Controlled profile mutation
-- One-step undo
-- CSV change journal
-- Optional local chart generation
-- Optional local AI fallback
-
-Not included in this release:
-
-- Business finance workflows
-- Cloud or remote AI by default
-- OCR pipelines
-- Voice input
-- Password or encryption features
-
----
-
-## Core Design Principles
-
-- Local-first operation
-- Deterministic-first reasoning
-- Explicit state
-- Constrained mutation
-- Auditable changes
-- Graceful degradation when optional components are unavailable
-
----
-
-## Repository Structure
-
-```text
-eon/
-├── EON_PFA.py
-├── run_eon.sh
-├── install_core.sh
-├── install_optional_charts.sh
-├── install_optional_ai.sh
-├── requirements-core.txt
-├── requirements-charts.txt
-├── requirements-ai.txt
-├── INSTALL.md
-├── DEMO_CASES.md
-├── DISTRIBUTION.md
-└── windows installer and packaging assets
+```bash
+cd EON   # or clone https://github.com/shembazai/eon
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
----
+From K1 (enables Tool Bus `eon.*` / Finance capability):
 
-## License
+```bash
+cd K1
+pip install -e ".[finance]"
+```
 
-Custom license — personal, educational, and non-commercial use permitted. Commercial use requires written permission. See [LICENSE](LICENSE) and [docs/LICENSE.md](docs/LICENSE.md).
+Rocky Linux headless (alongside SIM): see [INSTALL.md](INSTALL.md) or
+`./scripts/install_headless.sh`.
 
-## Security
+Optional extras:
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+```bash
+pip install -e ".[charts]"   # matplotlib for View Profile charts
+pip install -e ".[ai]"       # llama-cpp-python for Local AI
+```
+
+## Usage
+
+```bash
+eon health              # operator health dashboard
+eon health --json       # machine-readable (monitoring-friendly)
+eon self-test           # regression harness
+eon query "what are my monthly expenses?"
+eon logs --json -n 10    # recent task audit entries
+eon menu                # interactive CLI
+eon                     # same as menu when no subcommand
+```
+
+## Data paths
+
+| Variable | Purpose |
+| --- | --- |
+| `K1_EON_DATA_DIR` | K1 deployment data root (profile, journal, reports) |
+| `EON_PFA_BASE_DIR` | Legacy `~/AI`-style base (data under `<base>/finance/`) |
+| `EON_PFA_MODEL_PATH` | Optional GGUF override for Local AI (else discover best local fit) |
+| `K1_MODELS_DIR` | Model directory when using K1 layout |
+| `K1_EON_LOG_DIR` | Log directory (default `/opt/k1/logs`) |
+| `K1_EON_TASK_LOG` | Task audit JSONL (default `$K1_EON_LOG_DIR/eon-task-log.jsonl`) |
+
+## K1 integration
+
+With `pip install -e ".[finance]"` from the K1 tree, the Tool Bus adapter
+`k1.tools.adapters.eon` exposes `eon.query` / `eon.health` / `eon.available`.
+`FinanceCapability` routes personal-finance missions through that bus.
+Without EON installed, finance missions degrade gracefully (`eon_available: false`).
